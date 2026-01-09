@@ -41,6 +41,9 @@ const api = {
     headers: { 'Content-Type': 'multipart/form-data' },
     ...config
   }),
+  detectFromPath: (formData) => request.post('/detection/detect/path', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  }),
   detectBatch: (formData) => request.post('/detection/detect/batch', formData, {
     headers: { 'Content-Type': 'multipart/form-data' }
   }),

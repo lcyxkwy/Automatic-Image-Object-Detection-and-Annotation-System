@@ -367,7 +367,49 @@ onMounted(async () => {
   if (imageId) {
     await loadImageById(imageId)
   }
+  
+  // 检查是否有从预处理页面传来的图片路径
+  const preloadImagePath = sessionStorage.getItem('preloadImagePath')
+  if (preloadImagePath) {
+    sessionStorage.removeItem('preloadImagePath')
+    await loadImageFromPath(preloadImagePath)
+  }
 })
+
+// 从路径加载图像（用于预处理后的图片）
+const loadImageFromPath = async (imagePath) => {
+  try {
+    image = new Image()
+    image.crossOrigin = 'anonymous'
+    
+    image.onload = () => {
+      hasImage.value = true
+      imageWidth.value = image.width
+      imageHeight.value = image.height
+      annotations.value = []
+      selectedAnnotation.value = null
+      inferenceTime.value = null
+      currentImageId.value = null
+      currentImagePath.value = imagePath
+      
+      nextTick(() => {
+        fitToCanvas()
+        draw()
+      })
+      
+      ElMessage.success('增强图片加载成功，可进行检测')
+    }
+    
+    image.onerror = () => {
+      ElMessage.error('图片加载失败')
+    }
+    
+    image.src = imagePath
+  } catch (error) {
+    console.error('加载图片失败:', error)
+    ElMessage.error('加载图片失败')
+  }
+}
 
 // 通过 imageId 加载图像和标注
 const loadImageById = async (imageId) => {
@@ -919,17 +961,34 @@ const runDetection = async () => {
   detecting.value = true
   
   try {
+    let res
     const formData = new FormData()
-    formData.append('file', currentImagePath.value)
-    formData.append('conf_threshold', detectParams.confThreshold)
-    formData.append('iou_threshold', detectParams.iouThreshold)
-    formData.append('img_size', detectParams.imgSize)
-    formData.append('weights', detectParams.weights)
     
-    const res = await api.detect(formData)
+    // 判断 currentImagePath 是文件对象还是路径字符串
+    if (typeof currentImagePath.value === 'string') {
+      // 从路径检测（预处理后的增强图片等）
+      formData.append('image_path', currentImagePath.value)
+      formData.append('conf_threshold', detectParams.confThreshold)
+      formData.append('iou_threshold', detectParams.iouThreshold)
+      formData.append('img_size', detectParams.imgSize)
+      formData.append('weights', detectParams.weights)
+      
+      res = await api.detectFromPath(formData)
+    } else {
+      // 从文件上传检测
+      formData.append('file', currentImagePath.value)
+      formData.append('conf_threshold', detectParams.confThreshold)
+      formData.append('iou_threshold', detectParams.iouThreshold)
+      formData.append('img_size', detectParams.imgSize)
+      formData.append('weights', detectParams.weights)
+      
+      res = await api.detect(formData)
+    }
+    
     const result = res.data
     
     currentImageId.value = result.image_id
+    currentImagePath.value = result.image_path  // 更新为服务器返回的路径
     inferenceTime.value = result.inference_time
     
     // 将检测结果转换为标注
@@ -942,7 +1001,9 @@ const runDetection = async () => {
     draw()
     
   } catch (error) {
-    ElMessage.error('检测失败: ' + (error.response?.data?.detail || error.message))
+    console.error('检测失败:', error)
+    const errorMsg = error.response?.data?.detail || error.message || '未知错误'
+    ElMessage.error('检测失败: ' + errorMsg)
   } finally {
     detecting.value = false
   }

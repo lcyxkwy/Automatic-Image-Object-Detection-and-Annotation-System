@@ -5,6 +5,7 @@ import os
 import sys
 import uuid
 import json
+import yaml
 import subprocess
 import threading
 from pathlib import Path
@@ -13,7 +14,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
 
-from app.config import settings, YOLOV5_DIR
+from app.config import settings, YOLOV5_DIR, DATASET_DIR
 from app.models import TrainingConfig, TrainingStatus, EvaluationResult
 
 router = APIRouter()
@@ -33,12 +34,27 @@ def run_training(task_id: str, config: TrainingConfig):
         # 构建训练命令
         train_script = YOLOV5_DIR / "train.py"
         
-        # 确定权重路径
+        # 确定权重路径 - 优先使用本地权重文件
         weights_path = config.weights
         if not Path(weights_path).is_absolute():
-            weights_path = str(YOLOV5_DIR / weights_path)
-            if not Path(weights_path).exists():
-                weights_path = str(YOLOV5_DIR / "weights" / config.weights)
+            # 首先检查 yolov5 根目录
+            local_weights = YOLOV5_DIR / config.weights
+            if local_weights.exists():
+                weights_path = str(local_weights)
+            else:
+                # 检查 weights 目录
+                weights_dir_path = YOLOV5_DIR / "weights" / config.weights
+                if weights_dir_path.exists():
+                    weights_path = str(weights_dir_path)
+                else:
+                    # 如果权重文件不存在，记录警告但继续（YOLOv5会尝试下载）
+                    training_tasks[task_id]["message"] = f"警告: 本地未找到权重文件 {config.weights}，将尝试下载..."
+        
+        # 验证权重文件存在
+        if not Path(weights_path).exists():
+            training_tasks[task_id]["status"] = "failed"
+            training_tasks[task_id]["message"] = f"权重文件不存在: {weights_path}，请先下载权重文件到 yolov5/weights 目录"
+            return
         
         cmd = [
             sys.executable, str(train_script),
@@ -274,30 +290,139 @@ async def get_training_results(task_id: str):
 async def list_available_datasets():
     """
     列出可用的数据集配置
+    使用 datasets 目录下的 coco 和 VOC 数据集，以及自定义数据集
     """
     datasets = []
+    seen_names = set()
     
-    # 检查 yolov5/data 目录
-    data_dir = YOLOV5_DIR / "data"
-    if data_dir.exists():
-        for yaml_file in data_dir.glob("*.yaml"):
-            datasets.append({
+    # 允许的内置数据集列表
+    allowed_datasets = ['coco', 'voc']
+    
+    def get_dataset_info(yaml_file: Path, source: str) -> Optional[dict]:
+        """读取数据集配置并检查数据是否存在"""
+        try:
+            with open(yaml_file, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f)
+            
+            # 获取数据集路径
+            dataset_path = config.get('path', '')
+            if not Path(dataset_path).is_absolute():
+                # 相对路径，相对于yaml文件所在目录
+                dataset_path = str(yaml_file.parent / dataset_path) if dataset_path else str(yaml_file.parent)
+            
+            dataset_path = Path(dataset_path)
+            
+            # 检查数据集是否存在
+            images_exist = False
+            train_count = val_count = 0
+            
+            if dataset_path.exists():
+                images_dir = dataset_path / 'images'
+                if images_dir.exists():
+                    # 统计图像数量
+                    for subdir in images_dir.iterdir():
+                        if subdir.is_dir():
+                            count = sum(1 for _ in subdir.glob('*.jpg')) + sum(1 for _ in subdir.glob('*.png'))
+                            if 'train' in subdir.name.lower():
+                                train_count += count
+                            elif 'val' in subdir.name.lower():
+                                val_count += count
+                    images_exist = train_count > 0 or val_count > 0
+            
+            # 获取类别信息
+            names = config.get('names', {})
+            if isinstance(names, dict):
+                class_names = list(names.values())
+            else:
+                class_names = names if isinstance(names, list) else []
+            
+            return {
                 "name": yaml_file.stem,
                 "path": str(yaml_file),
-                "relative_path": f"data/{yaml_file.name}"
-            })
+                "relative_path": yaml_file.name,
+                "source": source,
+                "dataset_dir": str(dataset_path),
+                "exists": images_exist,
+                "train_images": train_count,
+                "val_images": val_count,
+                "num_classes": len(class_names),
+                "classes": class_names[:10] if len(class_names) > 10 else class_names,  # 只返回前10个类别
+                "has_download": 'download' in config
+            }
+        except Exception as e:
+            return None
     
-    # 检查自定义数据集目录
+    # 1. 检查 datasets 目录下的 coco 和 VOC 数据集
+    if DATASET_DIR.exists():
+        for subdir in DATASET_DIR.iterdir():
+            if subdir.is_dir() and subdir.name.lower() in allowed_datasets:
+                for yaml_file in subdir.glob("*.yaml"):
+                    info = get_dataset_info(yaml_file, 'datasets')
+                    if info:
+                        datasets.append(info)
+                        seen_names.add(yaml_file.stem.lower())
+    
+    # 2. 检查自定义数据集目录
     custom_dir = Path(settings.CUSTOM_DATASET_DIR)
     if custom_dir.exists():
         for yaml_file in custom_dir.glob("**/*.yaml"):
-            datasets.append({
-                "name": yaml_file.stem,
-                "path": str(yaml_file),
-                "relative_path": str(yaml_file.relative_to(custom_dir.parent))
-            })
+            if yaml_file.stem.lower() not in seen_names:
+                info = get_dataset_info(yaml_file, 'custom')
+                if info:
+                    datasets.append(info)
+                    seen_names.add(yaml_file.stem.lower())
+    
+    # 按来源和名称排序（内置数据集在前，自定义数据集在后）
+    def sort_key(d):
+        source_order = {'datasets': 0, 'custom': 1}
+        return (source_order.get(d['source'], 2), d['name'].lower())
+    
+    datasets.sort(key=sort_key)
     
     return {"datasets": datasets}
+
+
+@router.get("/weights")
+async def list_available_weights():
+    """
+    列出可用的预训练权重文件
+    """
+    weights = []
+    
+    # 检查 yolov5 根目录
+    for pt_file in YOLOV5_DIR.glob("*.pt"):
+        weights.append({
+            "name": pt_file.stem,
+            "path": str(pt_file),
+            "size_mb": round(pt_file.stat().st_size / (1024 * 1024), 2),
+            "exists": True
+        })
+    
+    # 检查 weights 目录
+    weights_dir = YOLOV5_DIR / "weights"
+    if weights_dir.exists():
+        for pt_file in weights_dir.glob("*.pt"):
+            # 避免重复
+            if not any(w['name'] == pt_file.stem for w in weights):
+                weights.append({
+                    "name": pt_file.stem,
+                    "path": str(pt_file),
+                    "size_mb": round(pt_file.stat().st_size / (1024 * 1024), 2),
+                    "exists": True
+                })
+    
+    # 添加标准权重列表（即使不存在）
+    standard_weights = ['yolov5n', 'yolov5s', 'yolov5m', 'yolov5l', 'yolov5x']
+    for name in standard_weights:
+        if not any(w['name'] == name for w in weights):
+            weights.append({
+                "name": name,
+                "path": f"{name}.pt",
+                "size_mb": 0,
+                "exists": False
+            })
+    
+    return {"weights": weights}
 
 
 @router.get("/hyperparameters")

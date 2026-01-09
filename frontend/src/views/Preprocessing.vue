@@ -175,6 +175,15 @@
                     {{ augmentResult.augmented_size?.width }} × {{ augmentResult.augmented_size?.height }}
                   </el-descriptions-item>
                 </el-descriptions>
+                
+                <div class="result-actions" style="margin-top: 15px; display: flex; gap: 10px;">
+                  <el-button type="primary" @click="downloadAugmented">
+                    <el-icon><Download /></el-icon> 下载图片
+                  </el-button>
+                  <el-button type="success" @click="useForDetection">
+                    <el-icon><VideoPlay /></el-icon> 用于检测
+                  </el-button>
+                </div>
               </div>
             </div>
           </el-col>
@@ -362,7 +371,17 @@
           
           <el-col :span="14">
             <div class="batch-results">
-              <h4>处理结果</h4>
+              <div class="results-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <h4 style="margin: 0;">处理结果</h4>
+                <el-button 
+                  v-if="batchResults.filter(r => r.success).length > 0"
+                  type="primary"
+                  size="small"
+                  @click="downloadAllAugmented"
+                >
+                  <el-icon><Download /></el-icon> 下载全部
+                </el-button>
+              </div>
               
               <el-progress 
                 v-if="batchProcessing"
@@ -379,6 +398,19 @@
                     </el-tag>
                   </template>
                 </el-table-column>
+                <el-table-column label="操作" width="100" v-if="batchResults.some(r => r.success)">
+                  <template #default="{ row }">
+                    <el-button 
+                      v-if="row.success" 
+                      type="primary" 
+                      size="small" 
+                      link
+                      @click="downloadSingleAugmented(row.augmented_path)"
+                    >
+                      下载
+                    </el-button>
+                  </template>
+                </el-table-column>
                 <el-table-column prop="error" label="错误信息" v-if="batchResults.some(r => r.error)" />
               </el-table>
               
@@ -393,8 +425,11 @@
 
 <script setup>
 import { ref, reactive, computed, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import api from '@/api'
+
+const router = useRouter()
 
 const activeTab = ref('augment')
 
@@ -582,6 +617,50 @@ const batchAugment = async () => {
   } finally {
     batchProcessing.value = false
   }
+}
+
+// 下载单张增强图片
+const downloadAugmented = () => {
+  if (!augmentResult.value?.augmented_path) return
+  downloadSingleAugmented(augmentResult.value.augmented_path)
+}
+
+// 下载单个文件
+const downloadSingleAugmented = (path) => {
+  const link = document.createElement('a')
+  link.href = path
+  link.download = path.split('/').pop()
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+}
+
+// 下载全部增强图片
+const downloadAllAugmented = () => {
+  const successResults = batchResults.value.filter(r => r.success && r.augmented_path)
+  
+  if (successResults.length === 0) {
+    ElMessage.warning('没有可下载的文件')
+    return
+  }
+  
+  // 逐个下载（简单实现）
+  successResults.forEach((result, index) => {
+    setTimeout(() => {
+      downloadSingleAugmented(result.augmented_path)
+    }, index * 300) // 每个文件间隔300ms
+  })
+  
+  ElMessage.success(`开始下载 ${successResults.length} 个文件`)
+}
+
+// 用于检测
+const useForDetection = () => {
+  if (!augmentResult.value?.augmented_path) return
+  
+  // 将增强后的图片路径存储到 sessionStorage，然后跳转
+  sessionStorage.setItem('preloadImagePath', augmentResult.value.augmented_path)
+  router.push('/detection')
 }
 </script>
 

@@ -74,12 +74,15 @@ async def health_check():
 async def system_info():
     """获取系统信息"""
     import torch
+    import sys
     return {
         "app_name": settings.APP_NAME,
         "version": settings.APP_VERSION,
         "cuda_available": torch.cuda.is_available(),
         "cuda_device_count": torch.cuda.device_count() if torch.cuda.is_available() else 0,
         "cuda_device_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+        "torch_version": torch.__version__,
+        "python_executable": sys.executable,
     }
 
 if __name__ == "__main__":

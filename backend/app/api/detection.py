@@ -9,7 +9,7 @@ from typing import List, Optional
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Query
 from fastapi.responses import JSONResponse
 
-from app.config import settings
+from app.config import settings, BASE_DIR, DATASET_DIR
 from app.models import DetectionRequest, DetectionResult, get_class_info
 from app.services.detector import detector
 
@@ -118,6 +118,66 @@ async def detect_images_batch(
             })
     
     return {"results": results, "total": len(results)}
+
+
+@router.post("/detect/path")
+async def detect_from_path(
+    image_path: str = Form(..., description="图像相对路径，如 /uploads/augmented/xxx.jpg"),
+    conf_threshold: float = Form(0.25),
+    iou_threshold: float = Form(0.45),
+    img_size: int = Form(640),
+    weights: str = Form("yolov5s.pt"),
+    classes: Optional[str] = Form(None, description="类别ID列表，逗号分隔")
+):
+    """
+    从本地路径检测图像（用于预处理后的增强图片）
+    """
+    # 将相对路径转换为绝对路径
+    # 支持的路径格式: /uploads/..., /datasets/..., /custom_datasets/...
+    if image_path.startswith('/uploads/'):
+        abs_path = BASE_DIR / image_path.lstrip('/')
+    elif image_path.startswith('/datasets/'):
+        abs_path = DATASET_DIR / image_path.replace('/datasets/', '')
+    elif image_path.startswith('/custom_datasets/'):
+        abs_path = Path(settings.CUSTOM_DATASET_DIR) / image_path.replace('/custom_datasets/', '')
+    else:
+        raise HTTPException(status_code=400, detail=f"不支持的路径格式: {image_path}")
+    
+    if not abs_path.exists():
+        raise HTTPException(status_code=404, detail=f"图像文件不存在: {image_path}")
+    
+    try:
+        # 解析类别列表
+        class_list = None
+        if classes:
+            class_list = [int(c.strip()) for c in classes.split(",")]
+        
+        # 复制图片到 images 目录并生成新的 ID
+        file_id = str(uuid.uuid4())
+        file_ext = abs_path.suffix
+        new_save_path = Path(settings.UPLOAD_DIR) / "images" / f"{file_id}{file_ext}"
+        new_save_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(abs_path, new_save_path)
+        
+        # 执行检测
+        result = detector.detect(
+            image_path=str(new_save_path),
+            conf_threshold=conf_threshold,
+            iou_threshold=iou_threshold,
+            img_size=img_size,
+            weights=weights,
+            classes=class_list
+        )
+        
+        result.image_path = f"/uploads/images/{file_id}{file_ext}"
+        result.image_id = file_id
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/detect/url")

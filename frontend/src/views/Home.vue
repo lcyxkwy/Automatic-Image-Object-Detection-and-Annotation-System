@@ -103,14 +103,18 @@
             <el-descriptions-item label="版本">{{ systemInfo.version || '1.0.0' }}</el-descriptions-item>
             <el-descriptions-item label="GPU 加速">
               <el-tag :type="systemInfo.cuda_available ? 'success' : 'info'">
-                {{ systemInfo.cuda_available ? '已启用' : '未启用' }}
+                {{ systemInfo.cuda_available ? '已启用' : '未启用 (CPU模式)' }}
               </el-tag>
             </el-descriptions-item>
             <el-descriptions-item label="GPU 设备" v-if="systemInfo.cuda_device_name">
               {{ systemInfo.cuda_device_name }}
             </el-descriptions-item>
             <el-descriptions-item label="检测模型">YOLOv5</el-descriptions-item>
-            <el-descriptions-item label="支持类别">80 类 (COCO)</el-descriptions-item>
+            <el-descriptions-item label="支持类别">
+              <el-tooltip content="预训练模型使用COCO 80类，自定义训练模型类别由数据集决定" placement="top">
+                <span>取决于所选模型 <el-icon><InfoFilled /></el-icon></span>
+              </el-tooltip>
+            </el-descriptions-item>
           </el-descriptions>
         </div>
         
@@ -134,7 +138,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onActivated } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '@/api'
 
@@ -150,7 +154,8 @@ const stats = ref({
 const systemInfo = ref({})
 const availableWeights = ref([])
 
-onMounted(async () => {
+// 加载数据的函数
+const loadData = async () => {
   // 获取系统信息
   try {
     const res = await api.getSystemInfo()
@@ -194,6 +199,15 @@ onMounted(async () => {
   } catch (error) {
     console.error('获取训练任务统计失败:', error)
   }
+}
+
+onMounted(() => {
+  loadData()
+})
+
+// 使用 onActivated 钩子，在组件被 keep-alive 缓存后重新激活时刷新数据
+onActivated(() => {
+  loadData()
 })
 
 const getModelSize = (name) => {
