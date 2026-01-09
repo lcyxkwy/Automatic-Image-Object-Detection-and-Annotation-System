@@ -229,9 +229,49 @@ async def get_available_weights():
 
 
 @router.get("/classes")
-async def get_classes():
+async def get_classes(dataset: str = Query("coco", description="数据集类型: coco, voc, custom, all")):
     """获取支持的目标类别列表"""
-    return {"classes": get_class_info()}
+    return {"classes": get_class_info(dataset)}
+
+
+@router.post("/classes/custom")
+async def add_custom_class_api(name: str = Query(..., description="类别名称"), 
+                                color: str = Query(None, description="颜色(hex格式)")):
+    """添加自定义类别"""
+    try:
+        from app.models import add_custom_class
+        new_class = add_custom_class(name, color)
+        return {"success": True, "class": new_class}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/classes/custom/{class_id}")
+async def delete_custom_class_api(class_id: int):
+    """删除自定义类别"""
+    try:
+        from app.models import delete_custom_class
+        delete_custom_class(class_id)
+        return {"success": True, "message": f"类别 {class_id} 已删除"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/classes/custom/{class_id}")
+async def update_custom_class_api(class_id: int,
+                                   name: str = Query(None, description="新类别名称"),
+                                   color: str = Query(None, description="新颜色(hex格式)")):
+    """更新自定义类别"""
+    try:
+        from app.models import update_custom_class
+        updated_class = update_custom_class(class_id, name, color)
+        return {"success": True, "class": updated_class}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/model/info")

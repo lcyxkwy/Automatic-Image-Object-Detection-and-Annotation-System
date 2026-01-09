@@ -3,6 +3,12 @@ import { createRouter, createWebHistory } from 'vue-router'
 const routes = [
   {
     path: '/',
+    name: 'Welcome',
+    component: () => import('@/views/Welcome.vue'),
+    meta: { title: '欢迎', hideLayout: true }
+  },
+  {
+    path: '/home',
     name: 'Home',
     component: () => import('@/views/Home.vue'),
     meta: { title: '首页' }

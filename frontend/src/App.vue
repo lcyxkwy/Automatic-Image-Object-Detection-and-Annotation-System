@@ -1,6 +1,12 @@
 <template>
   <el-config-provider :locale="zhCn">
-    <div class="app-container">
+    <!-- 欢迎页面（无布局） -->
+    <template v-if="currentRoute.meta?.hideLayout">
+      <router-view />
+    </template>
+    
+    <!-- 主应用布局 -->
+    <div v-else class="app-container">
       <el-container>
         <!-- 侧边栏 -->
         <el-aside :width="isCollapse ? '64px' : '220px'" class="app-aside">
@@ -17,7 +23,7 @@
             text-color="#bfcbd9"
             active-text-color="#409EFF"
           >
-            <el-menu-item index="/">
+            <el-menu-item index="/home">
               <el-icon><HomeFilled /></el-icon>
               <span>首页</span>
             </el-menu-item>
@@ -58,8 +64,8 @@
                 text
               />
               <el-breadcrumb separator="/">
-                <el-breadcrumb-item :to="{ path: '/' }">首页</el-breadcrumb-item>
-                <el-breadcrumb-item v-if="currentRoute.meta?.title">
+                <el-breadcrumb-item :to="{ path: '/home' }">首页</el-breadcrumb-item>
+                <el-breadcrumb-item v-if="currentRoute.meta?.title && currentRoute.name !== 'Home'">
                   {{ currentRoute.meta.title }}
                 </el-breadcrumb-item>
               </el-breadcrumb>
@@ -78,7 +84,7 @@
           <el-main class="app-main">
             <router-view v-slot="{ Component }">
               <transition name="fade" mode="out-in">
-                <keep-alive>
+                <keep-alive :exclude="['Welcome']">
                   <component :is="Component" />
                 </keep-alive>
               </transition>

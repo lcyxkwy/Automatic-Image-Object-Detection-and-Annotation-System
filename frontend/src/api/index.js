@@ -48,8 +48,17 @@ const api = {
     headers: { 'Content-Type': 'multipart/form-data' }
   }),
   getWeights: () => request.get('/detection/weights'),
-  getClasses: () => request.get('/detection/classes'),
+  getClasses: (dataset = 'coco') => request.get('/detection/classes', { params: { dataset } }),
   getModelInfo: (weights) => request.get('/detection/model/info', { params: { weights } }),
+  
+  // 自定义类别管理
+  addCustomClass: (name, color) => request.post('/detection/classes/custom', null, {
+    params: { name, color }
+  }),
+  deleteCustomClass: (classId) => request.delete(`/detection/classes/custom/${classId}`),
+  updateCustomClass: (classId, name, color) => request.put(`/detection/classes/custom/${classId}`, null, {
+    params: { name, color }
+  }),
   
   // 标注
   saveAnnotations: (data) => request.post('/annotation/save', data),

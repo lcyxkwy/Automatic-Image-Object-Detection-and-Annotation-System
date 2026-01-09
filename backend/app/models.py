@@ -159,6 +159,16 @@ COCO_CLASSES = [
     "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"
 ]
 
+# VOC 20类默认配置
+VOC_CLASSES = [
+    "aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car", "cat", "chair", "cow",
+    "diningtable", "dog", "horse", "motorbike", "person", "pottedplant", "sheep", "sofa",
+    "train", "tvmonitor"
+]
+
+# 自定义类别（动态加载）
+CUSTOM_CLASSES = []
+
 # 生成类别颜色
 def generate_colors(n):
     """生成n个不同的颜色"""
@@ -174,10 +184,120 @@ def generate_colors(n):
     return colors
 
 COCO_COLORS = generate_colors(len(COCO_CLASSES))
+VOC_COLORS = generate_colors(len(VOC_CLASSES))
 
-def get_class_info() -> List[ClassInfo]:
-    """获取类别信息列表"""
-    return [
-        ClassInfo(id=i, name=name, color=COCO_COLORS[i])
-        for i, name in enumerate(COCO_CLASSES)
-    ]
+def get_class_info(dataset: str = "coco") -> List[ClassInfo]:
+    """获取类别信息列表
+    
+    Args:
+        dataset: 数据集类型，可选值: "coco", "voc", "custom", "all"
+    """
+    if dataset.lower() == "coco":
+        return [
+            ClassInfo(id=i, name=name, color=COCO_COLORS[i])
+            for i, name in enumerate(COCO_CLASSES)
+        ]
+    elif dataset.lower() == "voc":
+        return [
+            ClassInfo(id=i, name=name, color=VOC_COLORS[i])
+            for i, name in enumerate(VOC_CLASSES)
+        ]
+    elif dataset.lower() == "custom":
+        return load_custom_classes()
+    else:  # "all" 或其他
+        # 合并所有类别
+        all_classes = []
+        offset = 0
+        
+        # COCO
+        for i, name in enumerate(COCO_CLASSES):
+            all_classes.append(ClassInfo(id=offset + i, name=f"[COCO] {name}", color=COCO_COLORS[i]))
+        offset += len(COCO_CLASSES)
+        
+        # VOC
+        for i, name in enumerate(VOC_CLASSES):
+            all_classes.append(ClassInfo(id=offset + i, name=f"[VOC] {name}", color=VOC_COLORS[i]))
+        offset += len(VOC_CLASSES)
+        
+        # Custom
+        custom = load_custom_classes()
+        for cls in custom:
+            all_classes.append(ClassInfo(id=offset + cls.id, name=f"[自定义] {cls.name}", color=cls.color))
+        
+        return all_classes
+
+
+def load_custom_classes() -> List[ClassInfo]:
+    """从文件加载自定义类别"""
+    import json
+    import os
+    from pathlib import Path
+    
+    custom_file = Path("custom_classes.json")
+    if not custom_file.exists():
+        return []
+    
+    try:
+        with open(custom_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            return [ClassInfo(**cls) for cls in data]
+    except Exception as e:
+        print(f"加载自定义类别失败: {e}")
+        return []
+
+
+def save_custom_classes(classes: List[ClassInfo]):
+    """保存自定义类别到文件"""
+    import json
+    from pathlib import Path
+    
+    try:
+        with open("custom_classes.json", 'w', encoding='utf-8') as f:
+            json.dump([cls.dict() for cls in classes], f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"保存自定义类别失败: {e}")
+        raise
+
+
+def add_custom_class(name: str, color: str = None) -> ClassInfo:
+    """添加自定义类别"""
+    custom = load_custom_classes()
+    
+    # 检查是否已存在
+    if any(cls.name == name for cls in custom):
+        raise ValueError(f"类别 '{name}' 已存在")
+    
+    # 生成ID和颜色
+    new_id = max([cls.id for cls in custom], default=-1) + 1
+    if color is None:
+        import random
+        color = "#{:06x}".format(random.randint(0, 0xFFFFFF))
+    
+    new_class = ClassInfo(id=new_id, name=name, color=color)
+    custom.append(new_class)
+    save_custom_classes(custom)
+    
+    return new_class
+
+
+def delete_custom_class(class_id: int):
+    """删除自定义类别"""
+    custom = load_custom_classes()
+    custom = [cls for cls in custom if cls.id != class_id]
+    save_custom_classes(custom)
+
+
+def update_custom_class(class_id: int, name: str = None, color: str = None) -> ClassInfo:
+    """更新自定义类别"""
+    custom = load_custom_classes()
+    
+    for cls in custom:
+        if cls.id == class_id:
+            if name is not None:
+                cls.name = name
+            if color is not None:
+                cls.color = color
+            save_custom_classes(custom)
+            return cls
+    
+    raise ValueError(f"类别ID {class_id} 不存在")

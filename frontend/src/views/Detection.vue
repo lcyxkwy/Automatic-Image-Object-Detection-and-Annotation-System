@@ -193,7 +193,31 @@
         
         <!-- 绘制类别选择 -->
         <div class="content-card" v-if="currentTool === 'draw'">
-          <h3 class="card-title">选择类别</h3>
+          <h3 class="card-title">
+            选择类别
+            <el-button 
+              type="primary" 
+              size="small" 
+              :icon="Plus"
+              circle
+              @click="showAddClassDialog = true"
+              style="float: right"
+            />
+          </h3>
+          
+          <el-form-item label="数据集" size="small" style="margin-bottom: 10px">
+            <el-select 
+              v-model="selectedDataset" 
+              @change="loadClasses"
+              style="width: 100%"
+            >
+              <el-option label="COCO (80类)" value="coco" />
+              <el-option label="VOC (20类)" value="voc" />
+              <el-option label="自定义类别" value="custom" />
+              <el-option label="全部" value="all" />
+            </el-select>
+          </el-form-item>
+          
           <el-select 
             v-model="selectedClassId" 
             filterable 
@@ -215,6 +239,29 @@
               </span>
             </el-option>
           </el-select>
+          
+          <!-- 自定义类别管理 -->
+          <div v-if="selectedDataset === 'custom'" style="margin-top: 10px">
+            <el-divider />
+            <div 
+              v-for="cls in classList" 
+              :key="cls.id"
+              class="custom-class-item"
+            >
+              <span 
+                class="color-dot" 
+                :style="{ backgroundColor: cls.color }"
+              ></span>
+              <span class="class-name">{{ cls.name }}</span>
+              <el-button 
+                type="danger" 
+                size="small" 
+                :icon="Delete"
+                circle
+                @click="deleteClass(cls.id)"
+              />
+            </div>
+          </div>
         </div>
         
         <!-- 操作按钮 -->
@@ -259,14 +306,35 @@
         <el-button type="primary" @click="exportAnnotations">导出</el-button>
       </template>
     </el-dialog>
+    
+    <!-- 添加自定义类别对话框 -->
+    <el-dialog v-model="showAddClassDialog" title="添加自定义类别" width="400px">
+      <el-form label-position="top">
+        <el-form-item label="类别名称" required>
+          <el-input 
+            v-model="newClassName" 
+            placeholder="请输入类别名称"
+            @keyup.enter="addCustomClass"
+          />
+        </el-form-item>
+        <el-form-item label="颜色">
+          <el-color-picker v-model="newClassColor" show-alpha />
+          <span style="margin-left: 10px; color: #666">{{ newClassColor }}</span>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showAddClassDialog = false">取消</el-button>
+        <el-button type="primary" @click="addCustomClass" :disabled="!newClassName">添加</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, onActivated, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, Check, Download, RefreshRight, VideoPlay } from '@element-plus/icons-vue'
+import { Delete, Check, Download, RefreshRight, VideoPlay, Plus } from '@element-plus/icons-vue'
 import api from '@/api'
 
 const route = useRoute()
@@ -298,8 +366,12 @@ const offsetY = ref(0)
 const annotations = ref([])
 const classList = ref([])
 const availableWeights = ref([])
+const selectedDataset = ref('coco')
 
 const showExportDialog = ref(false)
+const showAddClassDialog = ref(false)
+const newClassName = ref('')
+const newClassColor = ref('#409EFF')
 const exportFormat = ref('yolo')
 
 // 检测参数
@@ -338,12 +410,7 @@ const getClassName = (classId) => {
 // 初始化
 onMounted(async () => {
   // 获取类别列表
-  try {
-    const res = await api.getClasses()
-    classList.value = res.data.classes
-  } catch (error) {
-    console.error('获取类别列表失败:', error)
-  }
+  await loadClasses()
   
   // 获取可用权重
   try {
@@ -365,15 +432,48 @@ onMounted(async () => {
   // 检查是否有从其他页面传来的 imageId 参数
   const imageId = route.query.imageId
   if (imageId) {
+    console.log('从URL参数获取imageId:', imageId)
     await loadImageById(imageId)
   }
   
   // 检查是否有从预处理页面传来的图片路径
+  checkPreloadImage()
+  
+  // 检查是否有从批量处理页面传来的图片数据
+  checkBatchImageData()
+})
+
+// 检查并加载批量处理页面传来的图片数据
+const checkBatchImageData = async () => {
+  const imageDataStr = sessionStorage.getItem('currentImageData')
+  if (imageDataStr) {
+    try {
+      const imageData = JSON.parse(imageDataStr)
+      console.log('从sessionStorage获取图片数据:', imageData)
+      sessionStorage.removeItem('currentImageData')
+      
+      // 如果已经通过imageId加载了，就不需要再加载
+      if (!hasImage.value && imageData.imageId) {
+        await loadImageById(imageData.imageId)
+      }
+    } catch (error) {
+      console.error('解析图片数据失败:', error)
+    }
+  }
+}
+
+// 检查并加载预处理页面传来的图片
+const checkPreloadImage = async () => {
   const preloadImagePath = sessionStorage.getItem('preloadImagePath')
   if (preloadImagePath) {
     sessionStorage.removeItem('preloadImagePath')
     await loadImageFromPath(preloadImagePath)
   }
+}
+
+// 使用 onActivated 处理 keep-alive 缓存后重新激活的情况
+onActivated(() => {
+  checkPreloadImage()
 })
 
 // 从路径加载图像（用于预处理后的图片）
@@ -414,16 +514,23 @@ const loadImageFromPath = async (imagePath) => {
 // 通过 imageId 加载图像和标注
 const loadImageById = async (imageId) => {
   try {
+    console.log('开始加载图像，imageId:', imageId)
+    
     // 获取标注信息
     const res = await api.getAnnotations(imageId)
     const data = res.data
     
+    console.log('从API获取的数据:', data)
+    
     if (data.image_path) {
+      console.log('图像路径:', data.image_path)
+      
       // 加载图像
       image = new Image()
       image.crossOrigin = 'anonymous'
       
       image.onload = () => {
+        console.log('图像加载成功')
         hasImage.value = true
         imageWidth.value = image.width
         imageHeight.value = image.height
@@ -440,6 +547,7 @@ const loadImageById = async (imageId) => {
             is_manual: ann.is_manual,
             bbox: ann.bbox
           }))
+          console.log('加载了', annotations.value.length, '个标注')
         } else {
           annotations.value = []
         }
@@ -454,12 +562,22 @@ const loadImageById = async (imageId) => {
         ElMessage.success('图像加载成功')
       }
       
-      image.onerror = () => {
+      image.onerror = (e) => {
+        console.error('图像加载失败，尝试的路径:', image.src)
+        console.error('错误详情:', e)
         ElMessage.error('图像加载失败')
       }
       
-      // 设置图像源 - 需要使用正确的 URL
-      image.src = data.image_path.startsWith('/') ? data.image_path : `/uploads/images/${imageId}`
+      // 设置图像源 - 直接使用后端返回的路径
+      let imageSrc = data.image_path
+      
+      console.log('原始图像路径:', data.image_path)
+      console.log('使用的图像路径:', imageSrc)
+      
+      image.src = imageSrc
+    } else {
+      console.error('没有图像路径')
+      ElMessage.error('没有图像路径信息')
     }
   } catch (error) {
     console.error('加载图像失败:', error)
@@ -1081,6 +1199,63 @@ const resetAll = () => {
   }
 }
 
+// 加载类别列表
+const loadClasses = async () => {
+  try {
+    const res = await api.getClasses(selectedDataset.value)
+    classList.value = res.data.classes
+    if (classList.value.length > 0) {
+      selectedClassId.value = classList.value[0].id
+    }
+  } catch (error) {
+    console.error('获取类别列表失败:', error)
+    ElMessage.error('获取类别列表失败')
+  }
+}
+
+// 添加自定义类别
+const addCustomClass = async () => {
+  if (!newClassName.value.trim()) {
+    ElMessage.warning('请输入类别名称')
+    return
+  }
+  
+  try {
+    await api.addCustomClass(newClassName.value.trim(), newClassColor.value)
+    ElMessage.success('添加成功')
+    showAddClassDialog.value = false
+    newClassName.value = ''
+    newClassColor.value = '#409EFF'
+    
+    // 切换到自定义类别并重新加载
+    selectedDataset.value = 'custom'
+    await loadClasses()
+  } catch (error) {
+    console.error('添加类别失败:', error)
+    ElMessage.error(error.response?.data?.detail || '添加失败')
+  }
+}
+
+// 删除自定义类别
+const deleteClass = async (classId) => {
+  try {
+    await ElMessageBox.confirm('确定要删除该类别吗？', '提示', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+    
+    await api.deleteCustomClass(classId)
+    ElMessage.success('删除成功')
+    await loadClasses()
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('删除类别失败:', error)
+      ElMessage.error('删除失败')
+    }
+  }
+}
+
 // 监听工具变化
 watch(currentTool, () => {
   if (currentTool.value === 'draw') {
@@ -1243,6 +1418,33 @@ watch(currentTool, () => {
     width: 12px;
     height: 12px;
     border-radius: 50%;
+  }
+}
+
+.custom-class-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 4px;
+  margin-bottom: 5px;
+  transition: background 0.2s;
+  
+  &:hover {
+    background: #f5f5f5;
+  }
+  
+  .color-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  
+  .class-name {
+    flex: 1;
+    font-size: 14px;
+    color: #303133;
   }
 }
 </style>

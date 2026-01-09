@@ -3,6 +3,7 @@
 """
 import os
 import sys
+import re
 import uuid
 import json
 import yaml
@@ -87,21 +88,40 @@ def run_training(task_id: str, config: TrainingConfig):
         
         # 读取输出并更新进度
         output_lines = []
+        total_epochs = config.epochs  # 使用配置的epochs作为总数
+        
         for line in process.stdout:
-            output_lines.append(line.strip())
+            line_stripped = line.strip()
+            output_lines.append(line_stripped)
             training_tasks[task_id]["output"] = output_lines[-100:]  # 保留最后100行
             
-            # 解析进度
-            if "Epoch" in line:
+            # 解析进度 - 支持多种格式
+            # 格式1: "Epoch 1/100" 或 "     1/100"
+            # 格式2: "Epoch 0/99: 100%|..." (进度条格式)
+            
+            # 尝试匹配 epoch 进度
+            epoch_match = re.search(r'(\d+)/(\d+)', line_stripped)
+            if epoch_match:
                 try:
-                    # 解析类似 "Epoch 1/100" 的格式
-                    parts = line.split("Epoch")[1].strip().split("/")
-                    if len(parts) >= 2:
-                        current = int(parts[0].split()[0])
-                        total = int(parts[1].split()[0])
-                        training_tasks[task_id]["current_epoch"] = current
-                        training_tasks[task_id]["total_epochs"] = total
-                        training_tasks[task_id]["progress"] = (current / total) * 100
+                    current = int(epoch_match.group(1))
+                    total = int(epoch_match.group(2))
+                    
+                    # 验证这是epoch进度（total应该接近配置的epochs）
+                    if total == total_epochs or total == total_epochs - 1:
+                        training_tasks[task_id]["current_epoch"] = current + 1  # YOLOv5 epoch从0开始
+                        training_tasks[task_id]["total_epochs"] = total_epochs
+                        training_tasks[task_id]["progress"] = ((current + 1) / total_epochs) * 100
+                except:
+                    pass
+            
+            # 也检查是否有 "Epoch X" 的格式
+            epoch_only_match = re.search(r'Epoch\s+(\d+)', line_stripped, re.IGNORECASE)
+            if epoch_only_match and not epoch_match:
+                try:
+                    current = int(epoch_only_match.group(1))
+                    training_tasks[task_id]["current_epoch"] = current + 1
+                    training_tasks[task_id]["total_epochs"] = total_epochs
+                    training_tasks[task_id]["progress"] = ((current + 1) / total_epochs) * 100
                 except:
                     pass
         

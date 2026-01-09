@@ -129,7 +129,11 @@
               @click="viewResult(result)"
             >
               <div class="result-image">
-                <img :src="getImageUrl(result)" :alt="result.filename" />
+                <canvas 
+                  :ref="el => setCanvasRef(el, index)"
+                  class="result-canvas"
+                  @load="drawDetections(index)"
+                />
                 <div class="detection-count">
                   {{ result.detections?.length || 0 }} 个目标
                 </div>
@@ -178,10 +182,10 @@
     </el-row>
     
     <!-- 结果详情对话框 -->
-    <el-dialog v-model="showDetailDialog" title="检测详情" width="800px">
+    <el-dialog v-model="showDetailDialog" title="检测详情" width="800px" @opened="drawDetailCanvas">
       <div v-if="selectedResult" class="detail-content">
         <div class="detail-image">
-          <img :src="getImageUrl(selectedResult)" :alt="selectedResult.filename" />
+          <canvas ref="detailCanvas" class="detail-canvas" />
         </div>
         <div class="detail-info">
           <h4>检测结果</h4>
@@ -232,7 +236,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import api from '@/api'
@@ -249,6 +253,8 @@ const results = ref([])
 const selectedResult = ref(null)
 const showDetailDialog = ref(false)
 const showExportDialog = ref(false)
+const canvasRefs = ref([])
+const detailCanvas = ref(null)
 
 const exportFormat = ref('yolo')
 const includeImages = ref(false)
@@ -291,6 +297,15 @@ onMounted(async () => {
 
 const getImageUrl = (result) => {
   if (result.image_path) {
+    // 如果是完整URL，直接使用
+    if (result.image_path.startsWith('http')) {
+      return result.image_path
+    }
+    // 如果是相对路径（如 /uploads/images/xxx.jpg），添加API前缀
+    if (result.image_path.startsWith('/uploads/')) {
+      // 在开发环境中，需要添加后端服务器地址
+      return result.image_path // Vite proxy会自动代理到后端
+    }
     return result.image_path
   }
   // 如果有本地文件，创建 URL
@@ -298,6 +313,121 @@ const getImageUrl = (result) => {
     return URL.createObjectURL(result.file)
   }
   return ''
+}
+
+// 设置canvas引用
+const setCanvasRef = (el, index) => {
+  if (el) {
+    canvasRefs.value[index] = el
+  }
+}
+
+// 绘制检测框
+const drawDetections = async (index) => {
+  await nextTick()
+  const canvas = canvasRefs.value[index]
+  const result = results.value[index]
+  
+  if (!canvas || !result) return
+  
+  const img = new Image()
+  img.crossOrigin = 'anonymous'
+  img.onload = () => {
+    // 设置canvas尺寸
+    const maxWidth = 300
+    const scale = maxWidth / img.width
+    canvas.width = maxWidth
+    canvas.height = img.height * scale
+    
+    const ctx = canvas.getContext('2d')
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+    
+    // 绘制检测框
+    if (result.detections && result.detections.length > 0) {
+      result.detections.forEach((det, idx) => {
+        const x = det.bbox.x * scale
+        const y = det.bbox.y * scale
+        const w = det.bbox.width * scale
+        const h = det.bbox.height * scale
+        
+        // 生成颜色
+        const hue = (idx * 137.5) % 360
+        const color = `hsl(${hue}, 70%, 50%)`
+        
+        // 绘制边框
+        ctx.strokeStyle = color
+        ctx.lineWidth = 2
+        ctx.strokeRect(x, y, w, h)
+        
+        // 绘制标签背景
+        const label = `${det.class_name} ${(det.confidence * 100).toFixed(0)}%`
+        ctx.font = '12px Arial'
+        const textWidth = ctx.measureText(label).width
+        
+        ctx.fillStyle = color
+        ctx.fillRect(x, y - 18, textWidth + 8, 18)
+        
+        // 绘制标签文字
+        ctx.fillStyle = '#fff'
+        ctx.fillText(label, x + 4, y - 5)
+      })
+    }
+  }
+  img.src = getImageUrl(result)
+}
+
+// 绘制详情对话框的canvas
+const drawDetailCanvas = async () => {
+  await nextTick()
+  if (!detailCanvas.value || !selectedResult.value) return
+  
+  const canvas = detailCanvas.value
+  const result = selectedResult.value
+  
+  const img = new Image()
+  img.crossOrigin = 'anonymous'
+  img.onload = () => {
+    // 设置canvas尺寸
+    const maxWidth = 750
+    const scale = Math.min(maxWidth / img.width, 1)
+    canvas.width = img.width * scale
+    canvas.height = img.height * scale
+    
+    const ctx = canvas.getContext('2d')
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+    
+    // 绘制检测框
+    if (result.detections && result.detections.length > 0) {
+      result.detections.forEach((det, idx) => {
+        const x = det.bbox.x * scale
+        const y = det.bbox.y * scale
+        const w = det.bbox.width * scale
+        const h = det.bbox.height * scale
+        
+        // 生成颜色
+        const hue = (idx * 137.5) % 360
+        const color = `hsl(${hue}, 70%, 50%)`
+        
+        // 绘制边框
+        ctx.strokeStyle = color
+        ctx.lineWidth = 3
+        ctx.strokeRect(x, y, w, h)
+        
+        // 绘制标签背景
+        const label = `${det.class_name} ${(det.confidence * 100).toFixed(1)}%`
+        ctx.font = '14px Arial'
+        const textWidth = ctx.measureText(label).width
+        
+        ctx.fillStyle = color
+        ctx.fillRect(x, y - 22, textWidth + 10, 22)
+        
+        // 绘制标签文字
+        ctx.fillStyle = '#fff'
+        ctx.fillText(label, x + 5, y - 6)
+      })
+    }
+  }
+  img.src = getImageUrl(result)
 }
 
 const startBatchDetection = async () => {
@@ -339,6 +469,12 @@ const startBatchDetection = async () => {
     
     ElMessage.success(`批量检测完成，共处理 ${results.value.length} 张图像`)
     
+    // 绘制所有检测结果
+    await nextTick()
+    results.value.forEach((_, index) => {
+      drawDetections(index)
+    })
+    
   } catch (error) {
     ElMessage.error('批量检测失败: ' + error.message)
   } finally {
@@ -355,8 +491,10 @@ const goToAnnotation = async (result) => {
   // 先保存标注数据，然后跳转
   if (result.image_id) {
     try {
+      console.log('准备保存标注，结果数据:', result)
+      
       // 保存当前检测结果作为标注
-      await api.saveAnnotations({
+      const saveData = {
         image_id: result.image_id,
         image_path: result.image_path,
         image_width: result.image_width,
@@ -369,7 +507,19 @@ const goToAnnotation = async (result) => {
           is_manual: false,
           confidence: d.confidence
         }))
-      })
+      }
+      
+      console.log('保存的标注数据:', saveData)
+      
+      await api.saveAnnotations(saveData)
+      
+      console.log('标注保存成功，跳转到检测页面，imageId:', result.image_id)
+      
+      // 通过 sessionStorage 传递图片路径作为备用方案
+      sessionStorage.setItem('currentImageData', JSON.stringify({
+        imageId: result.image_id,
+        imagePath: result.image_path
+      }))
       
       router.push({
         path: '/detection',
@@ -377,6 +527,7 @@ const goToAnnotation = async (result) => {
       })
     } catch (error) {
       console.error('保存标注失败:', error)
+      ElMessage.error('保存标注失败: ' + (error.response?.data?.detail || error.message))
       // 即使保存失败也尝试跳转
       router.push({
         path: '/detection',
@@ -526,7 +677,7 @@ const clearResults = () => {
       height: 120px;
       background: #f5f5f5;
       
-      img {
+      .result-canvas {
         width: 100%;
         height: 100%;
         object-fit: cover;
@@ -587,7 +738,7 @@ const clearResults = () => {
     .detail-image {
       flex: 1;
       
-      img {
+      .detail-canvas {
         width: 100%;
         max-height: 400px;
         object-fit: contain;
