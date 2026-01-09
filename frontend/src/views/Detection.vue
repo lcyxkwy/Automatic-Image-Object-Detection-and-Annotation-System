@@ -717,10 +717,6 @@ const drawBoundingBox = (ann, isSelected) => {
   ctx.lineWidth = isSelected ? 3 / scale.value : 2 / scale.value
   ctx.strokeRect(bbox.x, bbox.y, bbox.width, bbox.height)
   
-  // 填充半透明背景
-  ctx.fillStyle = color + '30'
-  ctx.fillRect(bbox.x, bbox.y, bbox.width, bbox.height)
-  
   // 绘制标签
   const labelText = confidence 
     ? `${class_name} ${(confidence * 100).toFixed(0)}%`
