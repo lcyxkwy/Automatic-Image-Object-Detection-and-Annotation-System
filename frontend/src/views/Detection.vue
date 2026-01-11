@@ -332,12 +332,16 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, onActivated, watch, nextTick } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete, Check, Download, RefreshRight, VideoPlay, Plus } from '@element-plus/icons-vue'
 import api from '@/api'
 
 const route = useRoute()
+const router = useRouter()
+
+// 记录上一次加载的 imageId，避免重复加载
+let lastLoadedImageId = null
 
 // 状态
 const canvas = ref(null)
@@ -443,6 +447,17 @@ onMounted(async () => {
   checkBatchImageData()
 })
 
+// 监听路由参数变化（用于同一页面不同参数的情况）
+watch(
+  () => route.query.imageId,
+  async (newImageId, oldImageId) => {
+    if (newImageId && newImageId !== oldImageId && newImageId !== lastLoadedImageId) {
+      console.log('路由参数变化，加载新图像:', newImageId)
+      await loadImageById(newImageId)
+    }
+  }
+)
+
 // 检查并加载批量处理页面传来的图片数据
 const checkBatchImageData = async () => {
   const imageDataStr = sessionStorage.getItem('currentImageData')
@@ -472,9 +487,42 @@ const checkPreloadImage = async () => {
 }
 
 // 使用 onActivated 处理 keep-alive 缓存后重新激活的情况
-onActivated(() => {
+onActivated(async () => {
+  // 检查是否有从预处理页面传来的图片路径
   checkPreloadImage()
+  
+  // 检查是否有从批量处理页面传来的图片数据
+  await checkBatchImageDataOnActivate()
+  
+  // 检查路由参数中的 imageId 是否有变化
+  const imageId = route.query.imageId
+  if (imageId && imageId !== lastLoadedImageId) {
+    console.log('onActivated: 检测到新的 imageId:', imageId)
+    // 重新初始化画布（可能尺寸有变化）
+    nextTick(() => {
+      initCanvas()
+    })
+    await loadImageById(imageId)
+  }
 })
+
+// 检查并加载批量处理页面传来的图片数据（用于 onActivated）
+const checkBatchImageDataOnActivate = async () => {
+  const imageDataStr = sessionStorage.getItem('currentImageData')
+  if (imageDataStr) {
+    try {
+      const imageData = JSON.parse(imageDataStr)
+      console.log('onActivated: 从sessionStorage获取图片数据:', imageData)
+      sessionStorage.removeItem('currentImageData')
+      
+      if (imageData.imageId && imageData.imageId !== lastLoadedImageId) {
+        await loadImageById(imageData.imageId)
+      }
+    } catch (error) {
+      console.error('解析图片数据失败:', error)
+    }
+  }
+}
 
 // 从路径加载图像（用于预处理后的图片）
 const loadImageFromPath = async (imagePath) => {
@@ -515,6 +563,9 @@ const loadImageFromPath = async (imagePath) => {
 const loadImageById = async (imageId) => {
   try {
     console.log('开始加载图像，imageId:', imageId)
+    
+    // 记录当前加载的 imageId
+    lastLoadedImageId = imageId
     
     // 获取标注信息
     const res = await api.getAnnotations(imageId)

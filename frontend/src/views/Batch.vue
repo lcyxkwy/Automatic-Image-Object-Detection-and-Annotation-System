@@ -236,12 +236,14 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, nextTick, watch } from 'vue'
+import { ref, reactive, computed, onMounted, nextTick, watch, onActivated } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import api from '@/api'
+import { useBatchStore } from '@/stores/batchStore'
 
 const router = useRouter()
+const batchStore = useBatchStore()
 
 const uploadRef = ref(null)
 const fileList = ref([])
@@ -249,7 +251,12 @@ const processing = ref(false)
 const processedCount = ref(0)
 const exporting = ref(false)
 
-const results = ref([])
+// 使用 store 中的 results
+const results = computed({
+  get: () => batchStore.results,
+  set: (val) => { batchStore.results = val }
+})
+
 const selectedResult = ref(null)
 const showDetailDialog = ref(false)
 const showExportDialog = ref(false)
@@ -270,17 +277,28 @@ const detectParams = reactive({
 
 // 计算属性
 const totalDetections = computed(() => {
-  return results.value.reduce((sum, r) => sum + (r.detections?.length || 0), 0)
+  return batchStore.results.reduce((sum, r) => sum + (r.detections?.length || 0), 0)
 })
 
 const averageTime = computed(() => {
-  if (results.value.length === 0) return 0
-  const total = results.value.reduce((sum, r) => sum + (r.inference_time || 0), 0)
-  return Math.round(total / results.value.length)
+  if (batchStore.results.length === 0) return 0
+  const total = batchStore.results.reduce((sum, r) => sum + (r.inference_time || 0), 0)
+  return Math.round(total / batchStore.results.length)
 })
 
 const totalTime = computed(() => {
-  return results.value.reduce((sum, r) => sum + (r.inference_time || 0), 0)
+  return batchStore.results.reduce((sum, r) => sum + (r.inference_time || 0), 0)
+})
+
+// 页面激活时重新绘制结果
+onActivated(async () => {
+  if (batchStore.results.length > 0) {
+    await nextTick()
+    // 重新绘制所有检测结果
+    batchStore.results.forEach((_, index) => {
+      drawDetections(index)
+    })
+  }
 })
 
 onMounted(async () => {
@@ -292,6 +310,14 @@ onMounted(async () => {
     }
   } catch (error) {
     console.error('获取模型列表失败:', error)
+  }
+  
+  // 如果有恢复的结果，绘制检测框
+  if (batchStore.results.length > 0) {
+    await nextTick()
+    batchStore.results.forEach((_, index) => {
+      drawDetections(index)
+    })
   }
 })
 
@@ -326,7 +352,7 @@ const setCanvasRef = (el, index) => {
 const drawDetections = async (index) => {
   await nextTick()
   const canvas = canvasRefs.value[index]
-  const result = results.value[index]
+  const result = batchStore.results[index]
   
   if (!canvas || !result) return
   
@@ -438,7 +464,8 @@ const startBatchDetection = async () => {
   
   processing.value = true
   processedCount.value = 0
-  results.value = []
+  // 清空之前的结果
+  batchStore.results = []
   
   try {
     for (const fileItem of fileList.value) {
@@ -451,13 +478,13 @@ const startBatchDetection = async () => {
       
       try {
         const res = await api.detect(formData)
-        results.value.push({
+        batchStore.results.push({
           ...res.data,
           filename: fileItem.name,
           file: fileItem.raw
         })
       } catch (error) {
-        results.value.push({
+        batchStore.results.push({
           filename: fileItem.name,
           error: error.message,
           detections: []
@@ -467,11 +494,14 @@ const startBatchDetection = async () => {
       processedCount.value++
     }
     
-    ElMessage.success(`批量检测完成，共处理 ${results.value.length} 张图像`)
+    // 保存到 localStorage
+    batchStore.saveToStorage()
+    
+    ElMessage.success(`批量检测完成，共处理 ${batchStore.results.length} 张图像`)
     
     // 绘制所有检测结果
     await nextTick()
-    results.value.forEach((_, index) => {
+    batchStore.results.forEach((_, index) => {
       drawDetections(index)
     })
     
@@ -545,7 +575,7 @@ const exportAllResults = () => {
 }
 
 const doExport = async () => {
-  const imageIds = results.value
+  const imageIds = batchStore.results
     .filter(r => r.image_id)
     .map(r => r.image_id)
   
@@ -558,7 +588,7 @@ const doExport = async () => {
   
   try {
     // 先保存所有标注
-    for (const result of results.value) {
+    for (const result of batchStore.results) {
       if (result.image_id && result.detections) {
         await api.saveAnnotations({
           image_id: result.image_id,
@@ -595,7 +625,7 @@ const doExport = async () => {
 }
 
 const clearResults = () => {
-  results.value = []
+  batchStore.clearResults()
   fileList.value = []
 }
 </script>
